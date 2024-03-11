@@ -1,0 +1,48 @@
+# .golangci.yml
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - goimports
+    - revive
+    - gofmt
+    - unconvert
+    - unparam
+    - goconst
+    - nakedret
+    - prealloc
+    - errname
+    - errorlint
+    - gocritic
+    - nestif
+#     - misspell # enable this only temporarily to fix typos to avoid annoyance from false positives, careful when using with --fix!
+#     - gomnd # magic numbers
+#     - wsl # add some empty lines for better readability
+linters-settings:
+  goconst:
+    ignore-tests: true
+  govet:
+    check-shadowing: true
+  gofmt:
+    simplify: true
+issues:
+  # set the following to false to see missing comments on exported items
+  exclude-use-default: true
+  exclude:
+    - 'declaration of "(err|ctx)" shadows declaration at'
+  exclude-rules:
+    - linters: [unparam]
+      text: 'run - result 0 \(error\) is always nil'
+    - linters: [unparam]
+      path: '(.+)_test\.go'
+      text: 'always receives'
+    - linters: [revive]
+      path: '(.+)_test\.go'
+      text: 'empty-block'
+output:
+  format: junit-xml:lint-report.xml,colored-line-number
