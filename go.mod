@@ -2,7 +2,10 @@ module update-cloudflare-dyndns
 
 go 1.22
 
-require github.com/cloudflare/cloudflare-go v0.89.0
+require (
+	github.com/cloudflare/cloudflare-go v0.89.0
+	github.com/oklog/run v1.1.0
+)
 
 require (
 	github.com/goccy/go-json v0.10.2 // indirect

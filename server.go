@@ -13,21 +13,17 @@ import (
 )
 
 type Server struct {
-	api    *cloudflare.API
-	router *http.ServeMux
+	updater *DNSUpdater
+	router  *http.ServeMux
 }
 
-func NewServer(token string) (*Server, error) {
-	api, err := cloudflare.NewWithAPIToken(token)
-	if err != nil {
-		return nil, err
-	}
+func NewServer(updater *DNSUpdater) *Server {
 	s := &Server{
-		api:    api,
-		router: http.NewServeMux(),
+		updater: updater,
+		router:  http.NewServeMux(),
 	}
 	s.routes()
-	return s, nil
+	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -54,12 +50,14 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "missing ip parameter in query")
 		return
 	}
-	if addr, err := netip.ParseAddr(ipv4Query[0]); !addr.Is4() || err != nil {
+	var addr netip.Addr
+	var err error
+	if addr, err = netip.ParseAddr(ipv4Query[0]); !addr.Is4() || err != nil {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("invalid ipv4 address %s", ipv4Query[0]))
 		return
 	}
 
-	err := updateRecord(zone[0], ipv4Query[0])
+	err = s.updater.UpdateIP(addr, zone[0])
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

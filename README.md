@@ -2,6 +2,9 @@
 This is a simple http server with a single endpoint that on access updates a DNS record in Cloudflare. It is intended 
 to be used as a webhook for a dynamic DNS client, such as the one in FritzBox.
 
+If the service is used with FritzBox, it should be placed outside of the network that is being updated, as the FritzBox
+might query external DNS to resolve the address of the service.
+
 ## Requirements
 - Cloudflare API Token with permissions to read and edit Zone.DNS
 - Reverse proxy for HTTPS (FritzBox seems to only support https for DynDNS updates)
@@ -15,4 +18,5 @@ to be used as a webhook for a dynamic DNS client, such as the one in FritzBox.
    file to match your environment.
 
 ## Limitations
-- Only supports IPv4 A records for now
+- Only supports IPv4 A records for now (no IPv6 port forwarding in the FritzBox, also dynamic IPv6 seem to be missing
+  the point of IPv6)
