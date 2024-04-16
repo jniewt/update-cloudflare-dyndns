@@ -67,7 +67,7 @@ func main() {
 		}
 		done := make(chan struct{})
 		actors.Add(func() error {
-			return pollAndUpdate(done, updater, *interval, *zone)
+			return pollAndUpdate(done, updater, ntfy, *interval, *zone)
 		}, func(error) { close(done) })
 	}
 
@@ -117,9 +117,10 @@ type Notifier interface {
 	Notify(tags, msg string) error
 }
 
-func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, interval int, zone string) error {
+func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, interval int, zone string) error {
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
+	var failedIP, failedUpdate bool
 	for {
 		select {
 		case <-done:
@@ -128,11 +129,27 @@ func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, interval int, zone
 			addr, err := GetExternalIP()
 			if err != nil {
 				log.Error("Failed to get external IP", "error", err)
-				return err
+				if !failedIP { // this is the first failure
+					failedIP = true
+					_ = ntfy.Notify("warning", "Failed to get external IP: "+err.Error())
+				}
+				continue
+			}
+			if failedIP {
+				failedIP = false
+				_ = ntfy.Notify("info", "Repaired: get external IP")
 			}
 			if err = updater.UpdateIP(addr, zone); err != nil {
 				log.Error("Failed to update IP", "error", err)
-				return err
+				if !failedUpdate {
+					failedUpdate = true
+					_ = ntfy.Notify("warning", "Failed to update IP: "+err.Error())
+				}
+				continue
+			}
+			if failedUpdate {
+				failedUpdate = false
+				_ = ntfy.Notify("info", "Repaired: update IP")
 			}
 		}
 	}
