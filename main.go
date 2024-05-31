@@ -157,7 +157,7 @@ func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, int
 
 // GetExternalIP fetches the external IP address and returns it as a netip.Addr.
 func GetExternalIP() (netip.Addr, error) {
-	resp, err := http.Get("http://api.ipify.org")
+	resp, err := http.Get("https://api64.ipify.org")
 	if err != nil {
 		return netip.Addr{}, err
 	}
