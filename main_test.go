@@ -5,7 +5,7 @@ import (
 )
 
 func TestGetExternalIP(t *testing.T) {
-	got, err := GetExternalIP()
+	got, err := GetExternalIP("https://api.ipify.org")
 	if err != nil {
 		t.Fatalf("GetExternalIP() failed: %v", err)
 	}

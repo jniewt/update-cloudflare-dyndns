@@ -25,6 +25,7 @@ func main() {
 	ntfyAddr := flag.String("ntfy", "", "ntfy.sh token to send notifications to when the address changes")
 	zone := flag.String("zone", "", "Cloudflare zone to update (required when polling is enabled)")
 	debug := flag.Bool("debug", false, "enable debug logging")
+	queryURL := flag.String("url", "https://api.ipify.org", "URL to query for the external IP address")
 	flag.Parse()
 
 	if *debug {
@@ -67,7 +68,7 @@ func main() {
 		}
 		done := make(chan struct{})
 		actors.Add(func() error {
-			return pollAndUpdate(done, updater, ntfy, *interval, *zone)
+			return pollAndUpdate(done, updater, ntfy, *queryURL, *interval, *zone)
 		}, func(error) { close(done) })
 	}
 
@@ -117,7 +118,7 @@ type Notifier interface {
 	Notify(tags, msg string) error
 }
 
-func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, interval int, zone string) error {
+func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, url string, interval int, zone string) error {
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 	var failedIP, failedUpdate bool
@@ -126,7 +127,7 @@ func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, int
 		case <-done:
 			return nil
 		case <-ticker.C:
-			addr, err := GetExternalIP()
+			addr, err := GetExternalIP(url)
 			if err != nil {
 				log.Error("Failed to get external IP", "error", err)
 				if !failedIP { // this is the first failure
@@ -156,8 +157,8 @@ func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, int
 }
 
 // GetExternalIP fetches the external IP address and returns it as a netip.Addr.
-func GetExternalIP() (netip.Addr, error) {
-	resp, err := http.Get("https://api64.ipify.org")
+func GetExternalIP(url string) (netip.Addr, error) {
+	resp, err := http.Get(url)
 	if err != nil {
 		return netip.Addr{}, err
 	}
