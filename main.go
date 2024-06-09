@@ -34,7 +34,7 @@ func main() {
 
 	var ntfy Notifier
 	if *ntfyAddr != "" {
-		ntfy = &NtfyNotifier{token: *ntfyAddr}
+		ntfy = &NtfyNotifier{token: *ntfyAddr, grace: 30 * time.Minute}
 	} else {
 		ntfy = &FakeNotifier{}
 	}
@@ -105,23 +105,24 @@ func (d *DNSUpdater) UpdateIP(ip netip.Addr, zone string) error {
 	}
 	err := updateRecord(zone, ip.String())
 	if err != nil {
-		_ = d.ntfy.Notify("warning", "Failed to update record: "+err.Error())
 		return fmt.Errorf("failed to update record: %w", err)
 	}
 	d.addr = ip
 	log.Info("New IP address", "ip", ip)
-	_ = d.ntfy.Notify("globe_with_meridians", "New IP address: "+ip.String())
+	d.ntfy.NotifySuccessUpdateIP(ip)
 	return nil
 }
 
 type Notifier interface {
-	Notify(tags, msg string) error
+	NotifyFailedGetIP(error)
+	NotifyFailedUpdateIP(error)
+	NotifySuccessGetIP()
+	NotifySuccessUpdateIP(netip.Addr)
 }
 
 func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, url string, interval int, zone string) error {
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
-	var failedIP, failedUpdate bool
 	for {
 		select {
 		case <-done:
@@ -130,27 +131,14 @@ func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, url
 			addr, err := GetExternalIP(url)
 			if err != nil {
 				log.Error("Failed to get external IP", "error", err)
-				if !failedIP { // this is the first failure
-					failedIP = true
-					_ = ntfy.Notify("warning", "Failed to get external IP: "+err.Error())
-				}
+				ntfy.NotifyFailedGetIP(err)
 				continue
 			}
-			if failedIP {
-				failedIP = false
-				_ = ntfy.Notify("info", "Repaired: get external IP")
-			}
+			ntfy.NotifySuccessGetIP()
 			if err = updater.UpdateIP(addr, zone); err != nil {
 				log.Error("Failed to update IP", "error", err)
-				if !failedUpdate {
-					failedUpdate = true
-					_ = ntfy.Notify("warning", "Failed to update IP: "+err.Error())
-				}
+				ntfy.NotifyFailedUpdateIP(err)
 				continue
-			}
-			if failedUpdate {
-				failedUpdate = false
-				_ = ntfy.Notify("info", "Repaired: update IP")
 			}
 		}
 	}
