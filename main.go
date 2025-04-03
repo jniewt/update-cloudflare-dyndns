@@ -13,12 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cloudflare/cloudflare-go"
+	cloudflare "github.com/cloudflare/cloudflare-go"
 	group "github.com/oklog/run"
 )
 
 func main() {
-
 	bindAddr := flag.String("addr", ":8081", "address of the http server")
 	polling := flag.Bool("polling", false, "use periodic polling in addition to webhook")
 	interval := flag.Int("interval", 60, "interval in seconds for polling (only used if polling is enabled)")
@@ -26,6 +25,7 @@ func main() {
 	zone := flag.String("zone", "", "Cloudflare zone to update (required when polling is enabled)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	queryURL := flag.String("url", "https://api.ipify.org", "URL to query for the external IP address")
+	queryURL6 := flag.String("url6", "https://api6.ipify.org", "URL to query for the external IPv6 address")
 	flag.Parse()
 
 	if *debug {
@@ -68,7 +68,7 @@ func main() {
 		}
 		done := make(chan struct{})
 		actors.Add(func() error {
-			return pollAndUpdate(done, updater, ntfy, *queryURL, *interval, *zone)
+			return pollAndUpdate(done, updater, ntfy, *queryURL, *queryURL6, *interval, *zone)
 		}, func(error) { close(done) })
 	}
 
@@ -79,9 +79,10 @@ func main() {
 }
 
 type DNSUpdater struct {
-	api  *cloudflare.API
-	addr netip.Addr
-	ntfy Notifier
+	api   *cloudflare.API
+	addr  netip.Addr
+	addr6 netip.Addr
+	ntfy  Notifier
 	sync.Mutex
 }
 
@@ -96,19 +97,34 @@ func NewDNSUpdater(token string, n Notifier) (*DNSUpdater, error) {
 	}, nil
 }
 
-func (d *DNSUpdater) UpdateIP(ip netip.Addr, zone string) error {
+func (d *DNSUpdater) UpdateIP4(ip netip.Addr, zone string) error {
+	return d.updateIP(ip, zone, "A", &d.addr)
+}
+
+func (d *DNSUpdater) UpdateIP6(ip netip.Addr, zone string) error {
+	return d.updateIP(ip, zone, "AAAA", &d.addr6)
+}
+
+func (d *DNSUpdater) updateIP(ip netip.Addr, zone string, recordType string, addrPtr *netip.Addr) error {
 	d.Lock()
 	defer d.Unlock()
-	if d.addr == ip {
-		log.Debug("IP address unchanged", "ip", ip)
+
+	// Check if the address has actually changed
+	if *addrPtr == ip {
+		log.Debug("Address unchanged", "type", recordType, "ip", ip)
 		return nil
 	}
-	err := updateRecord(zone, ip.String())
+
+	err := updateRecord(zone, ip.String(), recordType)
 	if err != nil {
-		return fmt.Errorf("failed to update record: %w", err)
+		return fmt.Errorf("failed to update %s record: %w", recordType, err)
 	}
-	d.addr = ip
-	log.Info("New IP address", "ip", ip)
+
+	// Update the stored address
+	*addrPtr = ip
+	log.Info("New address stored", "type", recordType, "ip", ip)
+
+	// Notify about the successful update
 	d.ntfy.NotifySuccessUpdateIP(ip)
 	return nil
 }
@@ -120,7 +136,7 @@ type Notifier interface {
 	NotifySuccessUpdateIP(netip.Addr)
 }
 
-func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, url string, interval int, zone string) error {
+func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, url, url6 string, interval int, zone string) error {
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 	for {
@@ -128,17 +144,54 @@ func pollAndUpdate(done <-chan struct{}, updater *DNSUpdater, ntfy Notifier, url
 		case <-done:
 			return nil
 		case <-ticker.C:
-			addr, err := GetExternalIP(url)
-			if err != nil {
-				log.Error("Failed to get external IP", "error", err)
-				ntfy.NotifyFailedGetIP(err)
-				continue
+			var wg sync.WaitGroup
+			var addrV4, addrV6 netip.Addr
+			var errV4, errV6 error
+
+			wg.Add(2)
+
+			// Fetch IPv4
+			go func() {
+				defer wg.Done()
+				addrV4, errV4 = GetExternalIP(url)
+				if errV4 != nil {
+					log.Error("Failed to get external IPv4", "error", errV4)
+					ntfy.NotifyFailedGetIP(fmt.Errorf("IPv4: %w", errV4))
+				} else {
+					log.Debug("Got external IPv4", "ip", addrV4)
+					ntfy.NotifySuccessGetIP()
+				}
+			}()
+
+			// Fetch IPv6
+			go func() {
+				defer wg.Done()
+				addrV6, errV6 = GetExternalIP(url6)
+				if errV6 != nil {
+					log.Error("Failed to get external IPv6", "error", errV6)
+					ntfy.NotifyFailedGetIP(fmt.Errorf("IPv6: %w", errV6))
+				} else {
+					log.Debug("Got external IPv6", "ip", addrV6)
+					ntfy.NotifySuccessGetIP()
+				}
+			}()
+
+			wg.Wait()
+
+			// Update IPv4 if fetched successfully
+			if errV4 == nil && addrV4.IsValid() {
+				if err := updater.UpdateIP4(addrV4, zone); err != nil {
+					log.Error("Failed to update IPv4", "error", err)
+					ntfy.NotifyFailedUpdateIP(fmt.Errorf("IPv4: %w", err))
+				}
 			}
-			ntfy.NotifySuccessGetIP()
-			if err = updater.UpdateIP(addr, zone); err != nil {
-				log.Error("Failed to update IP", "error", err)
-				ntfy.NotifyFailedUpdateIP(err)
-				continue
+
+			// Update IPv6 if fetched successfully
+			if errV6 == nil && addrV6.IsValid() {
+				if err := updater.UpdateIP6(addrV6, zone); err != nil {
+					log.Error("Failed to update IPv6", "error", err)
+					ntfy.NotifyFailedUpdateIP(fmt.Errorf("IPv6: %w", err))
+				}
 			}
 		}
 	}

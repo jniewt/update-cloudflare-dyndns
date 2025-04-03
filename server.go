@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	log "log/slog"
 	"net/http"
 	"net/netip"
 	"os"
 
-	"github.com/cloudflare/cloudflare-go"
+	cloudflare "github.com/cloudflare/cloudflare-go"
 )
 
 type Server struct {
@@ -57,7 +56,7 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.updater.UpdateIP(addr, zone[0])
+	err = s.updater.UpdateIP4(addr, zone[0])
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -87,7 +86,8 @@ func httpSuccess(w http.ResponseWriter, status int, message string) {
 	}
 }
 
-func updateRecord(zoneName string, ipv4 string) error {
+// updateRecord updates a DNS record with the given IP address and record type. Use "A" for IPv4 and "AAAA" for IPv6.
+func updateRecord(zoneName string, ip string, recordType string) error {
 	api, err := cloudflare.NewWithAPIToken(os.Getenv("CLOUDFLARE_API_TOKEN"))
 	if err != nil {
 		return err
@@ -97,40 +97,37 @@ func updateRecord(zoneName string, ipv4 string) error {
 	if err != nil {
 		return fmt.Errorf("failed to find zone %s: %w", zoneName, err)
 	}
-	id, err := findIP4ARecordID(api, zoneID)
+	id, err := findDNSRecordID(api, zoneID, recordType)
 	if err != nil {
-		return fmt.Errorf("failed to find record for zone %s: %w", zoneName, err)
+		return fmt.Errorf("failed to find %s record for zone %s: %w", recordType, zoneName, err)
 	}
-	update := cloudflare.UpdateDNSRecordParams{
-		Content: ipv4,
+	updateParams := cloudflare.UpdateDNSRecordParams{
+		Content: ip,
+		Type:    recordType,
 		ID:      id,
 	}
-	rec, err := api.UpdateDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), update)
+	rec, err := api.UpdateDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), updateParams)
 	if err != nil {
-		return fmt.Errorf("failed to update record for zone %s: %w", zoneName, err)
+		return fmt.Errorf("failed to update %s record for zone %s: %w", recordType, zoneName, err)
 	}
-	log.Info("Record updated successfully.", "record", rec)
+	log.Info("Record updated successfully.", "recordType", rec.Type, "content", rec.Content, "zone", zoneName)
 
 	return nil
 }
 
-func findIP4ARecordID(api *cloudflare.API, zoneID string) (string, error) {
-	recs, _, err := api.ListDNSRecords(context.Background(), cloudflare.ZoneIdentifier(zoneID), cloudflare.ListDNSRecordsParams{})
+// findDNSRecordID finds the ID of the first DNS record matching the specified type.
+func findDNSRecordID(api *cloudflare.API, zoneID string, recordType string) (string, error) {
+	recs, _, err := api.ListDNSRecords(context.Background(), cloudflare.ZoneIdentifier(zoneID), cloudflare.ListDNSRecordsParams{Type: recordType})
 	if err != nil {
 		return "", err
 	}
-	var id string
-	for _, r := range recs {
-		if r.Type == "A" {
-			addr := netip.MustParseAddr(r.Content)
-			if addr.Is4() {
-				id = r.ID
-				break
-			}
-		}
+
+	// Since we filter by Type in the API call, the first record found should be the correct one.
+	// Cloudflare typically only allows one A or AAAA record for the root zone name unless using load balancing etc.
+	if len(recs) > 0 {
+		log.Debug("Found DNS record", "type", recordType, "id", recs[0].ID, "content", recs[0].Content)
+		return recs[0].ID, nil
 	}
-	if id == "" {
-		return "", errors.New("no IPv4 A record found")
-	}
-	return id, nil
+
+	return "", fmt.Errorf("no %s record found", recordType)
 }
